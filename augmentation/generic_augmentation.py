@@ -1,16 +1,6 @@
-#!/usr/bin/env python
 
-#================================================================
-#   Copyright (C) 2021 Yufeng Liu (Braintell, Southeast University). All rights reserved.
-#   
-#   Filename     : generic_augmentation.py
-#   Author       : Yufeng Liu
-#   Date         : 2021-04-02
-#   Description  : Some codes are borrowed from ssd.pytorch: https://github.com/amdegroot/ssd.pytorch
-#                  And some augmentation implementations are directly copied from nnUNet.
-#
-#================================================================
-
+import os
+import sys
 import shutil
 import numpy as np
 from skimage.transform import resize
@@ -19,7 +9,11 @@ from skimage import exposure
 import SimpleITK as sitk
 from batchgenerators.augmentations.utils import create_zero_centered_coordinate_mesh, elastic_deform_coordinates, interpolate_img, rotate_coords_2d, rotate_coords_3d, scale_coords, elastic_deform_coordinates_2, resize_multichannel_image
 
-from neuronet.utils import image_util
+current = os.path.dirname(os.path.realpath(__file__))
+parent = os.path.dirname(current)
+sys.path.append(parent)
+
+from utils import image_util
 
 def get_random_shape(img, scale_range, per_axis):
     if type(img) == np.ndarray and img.size > 1024:
@@ -30,11 +24,11 @@ def get_random_shape(img, scale_range, per_axis):
         scales = np.random.uniform(*scale_range, size=len(shape))
     else:
         scales = np.array([np.random.uniform(*scale_range)] * len(shape))
-    target_shape = np.round(shape * scales).astype(np.int)
+    target_shape = np.round(shape * scales).astype(np.int32)
     return shape, target_shape
 
 
-def image_scale_4D(img, tree, soma, spacing, shape, target_shape, mode, anti_aliasing, update_spacing):
+def image_scale_4D(img, tree, soma, shape, target_shape, mode, anti_aliasing):
     if target_shape.prod() / shape.prod() > 1:
         # up-scaling
         order = 0
@@ -48,25 +42,20 @@ def image_scale_4D(img, tree, soma, spacing, shape, target_shape, mode, anti_ali
         new_img[c] = resize(img[c], target_shape, order=order, mode=mode, anti_aliasing=anti_aliasing)
 
     for c in range(soma.shape[0]):
-        new_soma[c] = resize(soma[c], target_shape, order=order, mode=mode, anti_aliasing=anti_aliasing)
+        new_soma[c] = resize(soma[c], target_shape, order=0, mode=mode, anti_aliasing=anti_aliasing)
 
     if tree is not None:
         scales = target_shape / shape
         new_tree = []
         for leaf in tree:
             idx, type_, x, y, z, r, p = leaf
-            new_tree.append((idx,type_,x*scales[2],y*scales[1],z*scales[0],r,p))
+            new_tree.append((idx, type_, x*scales[2], y*scales[1], z*scales[0], r, p))
         tree = new_tree
 
-    # for the spacing
-    if spacing is not None:
-        if update_spacing:
-            scales = target_shape / shape
-            spacing = scales * np.array(spacing)
-    return new_img, new_tree, new_soma, spacing
+    return new_img, new_tree, new_soma
 
 
-def random_crop_image_4D(img, tree, soma, spacing, target_shape):
+def random_crop_image_4D(img, tree, soma, target_shape):
     new_img = np.zeros((img.shape[0], *target_shape), dtype=img.dtype)
     new_soma = np.zeros((soma.shape[0], *target_shape), dtype=soma.dtype)
     sz = None
@@ -87,14 +76,12 @@ def random_crop_image_4D(img, tree, soma, spacing, target_shape):
         for leaf in tree:
             idx, type_, x, y, z, r, p = leaf
             x = x - sx
-            # Since the y-coordinate in swc file is mirrored by crop
-            # center, the coordinate change should take care!!!
             y = y - sy
             z = z - sz
             new_tree.append((idx,type_,x,y,z,r,p))
-        return new_img, new_tree, new_soma, spacing
+        return new_img, new_tree, new_soma
 
-    return new_img, tree, new_soma, spacing
+    return new_img, tree, new_soma
 
 
 class Compose(object):
@@ -111,21 +98,21 @@ class Compose(object):
     def __init__(self, transforms):
         self.transforms = transforms
 
-    def __call__(self, img, tree=None, soma=None, spacing=None):
+    def __call__(self, img, tree=None, soma=None):
         for t in self.transforms:
-            img, tree, soma, spacing = t(img, tree, soma, spacing)
-        return img, tree, soma, spacing
+            img, tree, soma = t(img, tree, soma)
+        return img, tree, soma
 
 class ResizeToDividable(object):
     def __init__(self, divid=2**5):
         self.divid = divid
 
-    def __call__(self, img, tree=None, soma=None, spacing=None):
+    def __call__(self, img, tree=None, soma=None):
         shape = np.array(img[0].shape).astype(np.float32)
         target_shape = np.round(shape / self.divid).astype(np.long) * self.divid
-        img, tree, soma, spacing = image_scale_4D(img, tree, soma, spacing, shape, target_shape, mode='edge', anti_aliasing=False, update_spacing=True)
+        img, tree, soma = image_scale_4D(img, tree, soma, shape, target_shape, mode='edge', anti_aliasing=False)
         
-        return img, tree, soma, spacing
+        return img, tree, soma
         
 
 class AbstractTransform(object):
@@ -140,10 +127,10 @@ class ConvertToFloat(object):
     def __init__(self, dtype=np.float32):
         self.dtype = dtype
     
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
+    def __call__(self, img, tree=None, soma_pad=None):
         if not img.dtype.name.startswith('float'):
             img = img.astype(self.dtype)
-        return img, tree, soma_pad, spacing
+        return img, tree, soma_pad
 
 
 # Coordinate-invariant augmentation
@@ -185,7 +172,7 @@ class RandomGaussianNoise(AbstractTransform):
         self.max_var = max_var
         self.max_ratio = max_ratio
 
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
+    def __call__(self, img, tree=None, soma_pad=None):
         if np.random.random() < self.p:
             var = np.random.uniform(0, self.max_var)
             img_flat = img.reshape((img.shape[0],-1))
@@ -197,7 +184,7 @@ class RandomGaussianNoise(AbstractTransform):
             #print(f'RandomGaussianNoise with var: {var}')
             
             img += noise
-        return img, tree, soma_pad, spacing
+        return img, tree, soma_pad
 
 class RandomGaussianBlur(AbstractTransform):
     def __init__(self, kernels=(0,1), p=0.5):
@@ -294,7 +281,7 @@ class RandomGammaTransformDualModes(AbstractTransform):
         self.per_channel = per_channel
         self.retain_stats = retain_stats
     
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
+    def __call__(self, img, tree=None, soma_pad=None):
         if np.random.random() < self.p:
             if np.random.randint(2):
                 img = image_util.augment_gamma(img, self.gamma_range, 
@@ -306,7 +293,7 @@ class RandomGammaTransformDualModes(AbstractTransform):
                                            False,
                                            per_channel=self.per_channel,
                                            retain_stats=self.retain_stats)
-        return img, tree, soma_pad, spacing
+        return img, tree, soma_pad
 
 class GammaTransform(AbstractTransform):
     def __init__(self, gamma=1.0, trunc_thresh=0, invert_image=False, per_channel=False, retain_stats=False):
@@ -331,7 +318,7 @@ class RandomMirror(AbstractTransform):
         super(RandomMirror, self).__init__(p)
         
 
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
+    def __call__(self, img, tree=None, soma_pad=None):
         if np.random.random() < self.p:
             axis = np.random.randint(img.ndim - 1) + 1
             # NOTE: img in (c,z,y,x) order, while coord in tree is (x,y,z)
@@ -369,42 +356,41 @@ class RandomMirror(AbstractTransform):
                         new_tree.append((idx,type_,x,y,z,r,p))
                 tree = new_tree
 
-        return img, tree, soma_pad, spacing
+        return img, tree, soma_pad
                 
 
 #The following geometric transformation can be composed into an unique geometric transformation. 
 # But I prefer to use this separate versions, since they are implemented with matrix production, 
 # which is much more efficient. 
 class RandomScale(AbstractTransform):
-    def __init__(self, p=0.5, scale_range=(0.85,1.25), per_axis=True, anti_aliasing=False, mode='edge', update_spacing=True):
+    def __init__(self, p=0.5, scale_range=(0.85,1.25), per_axis=True, anti_aliasing=False, mode='edge'):
         super(RandomScale, self).__init__(p)
         self.per_axis = per_axis
         self.anti_aliasing = anti_aliasing
         self.mode = mode
-        self.update_spacing = update_spacing
+        self.scale_range = scale_range
 
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
+    def __call__(self, img, tree=None, soma_pad=None):
         if np.random.random() < self.p:
             shape, target_shape = get_random_shape(img, self.scale_range, self.per_axis)
-            img, tree, soma_pad, spacing = image_scale_4D(img, tree, soma_pad, spacing, shape, target_shape, self.mode, self.anti_aliasing, self.update_spacing)
+            img, tree, soma_pad = image_scale_4D(img, tree, soma_pad, shape, target_shape, self.mode, self.anti_aliasing)
 
-        return img, tree, soma_pad, spacing
+        return img, tree, soma_pad
 
 # verified
 class ScaleToFixedSize(AbstractTransform):
-    def __init__(self, p, target_shape, anti_aliasing=False, mode='edge', update_spacing=True):
+    def __init__(self, p, target_shape, anti_aliasing=False, mode='edge'):
         super(ScaleToFixedSize, self).__init__(p)
         self.target_shape = np.array(target_shape)
         self.anti_aliasing = anti_aliasing
         self.mode = mode
-        self.update_spacing = update_spacing
 
-    def __call__(self, img, tree=None, soma=None, spacing=None):
+    def __call__(self, img, tree=None, soma=None):
         if np.random.random() < self.p:
             shape = np.array(img[0].shape)
-            img, tree, soma, spacing = image_scale_4D(img, tree, soma, spacing, shape, self.target_shape, self.mode, self.anti_aliasing, self.update_spacing)
+            img, tree, soma = image_scale_4D(img, tree, soma, shape, self.target_shape, self.mode, self.anti_aliasing)
 
-        return img, tree, soma, spacing
+        return img, tree, soma
     
 
 class RandomCrop(AbstractTransform):
@@ -415,20 +401,20 @@ class RandomCrop(AbstractTransform):
         self.per_axis = per_axis
         self.force_fg_sampling = force_fg_sampling
 
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
+    def __call__(self, img, tree=None, soma_pad=None):
         if np.random.random() > self.p:
-            return img, tree, soma_pad, spacing
+            return img, tree, soma_pad
 
         if self.crop_range[0] == self.crop_range[1]:
             target_shape = self.imgshape
-            img, tree, soma_pad, spacing = random_crop_image_4D(img, tree, soma_pad, spacing, target_shape)
-            return img, tree, soma_pad, spacing
+            img, tree, soma_pad = random_crop_image_4D(img, tree, soma_pad, target_shape)
+            return img, tree, soma_pad
         else:
             if self.force_fg_sampling:
                 num_trail = 0
                 while num_trail < 10:
                     shape, target_shape = get_random_shape(self.imgshape, self.crop_range, self.per_axis)
-                    new_img, new_tree, new_soma, new_spacing = random_crop_image_4D(img, tree, soma_pad, spacing, target_shape)
+                    new_img, new_tree, new_soma = random_crop_image_4D(img, tree, soma_pad, target_shape)
                     # check foreground existence
                     has_fg = False
                     if np.sum(new_tree) > 10:
@@ -441,9 +427,9 @@ class RandomCrop(AbstractTransform):
                     print("No foreground found after three random crops!")
             else:
                 shape, target_shape = get_random_shape(self.imgshape, self.crop_range, self.per_axis)
-                new_img, new_tree, new_soma, new_spacing = random_crop_image_4D(img, tree, soma_pad, spacing, target_shape)
+                new_img, new_tree, new_soma = random_crop_image_4D(img, tree, soma_pad, target_shape)
         
-            return new_img, new_tree, new_soma, new_spacing
+            return new_img, new_tree, new_soma
 
 # verified
 class CenterCropKeepRatio(AbstractTransform):
@@ -721,47 +707,6 @@ class InstanceAugmentation(object):
         else:
             raise NotImplementedError
 
-    def __call__(self, img, tree=None, soma_pad=None, spacing=None):
-        return self.augment(img, tree, soma_pad, spacing)
+    def __call__(self, img, tree=None, soma_pad=None):
+        return self.augment(img, tree, soma_pad)
 
-
-if __name__ == '__main__':
-    import time
-    from neuronet.utils.image_util import normalize_normal, unnormalize_normal
-    from neuronet.utils.util import set_deterministic
-    from swc_handler import parse_swc, write_swc
-
-    
-    file_prefix = '8315_19523_2299'
-    imgfile = f'../data/task0005_cropAll/{file_prefix}.npz'
-    swcfile = f'../data/task0005_cropAll/{file_prefix}.swc'
-    #set_deterministic(True, seed=1024)
-    #img = sitk.GetArrayFromImage(sitk.ReadImage(imgfile))[None]
-    #img = img.astype(np.float32)
-    # normalize to N(0,1) distribution
-    #img = normalize_normal(img)
-
-    img = np.load(imgfile)['data']    # 4D
-    if 0:
-        # save original image for visual inspection
-        img_orig_un = unnormalize_normal(img.copy()).astype(np.uint8)[0]
-        sitk.WriteImage(sitk.GetImageFromArray(img_orig_un), 'original.tiff')
-        shutil.copy(swcfile, 'original.swc')
-
-    print(f'Statistics of original image: {img.mean()}, {img.std()}, {img.min()}, {img.max()}')
-    tree = parse_swc(swcfile)
-    spacing = [1.0, 0.23, 0.23]
-    t0 = time.time()
-    
-    #aug = InstanceAugmentation(p=1.0)
-    #aug = RandomGaussianNoise(p=1.0)
-    aug = RandomCrop(p=1.0, imgshape=(128,160,160))
-    img_new, tree_new, spacing = aug(img, tree, spacing)
-    print(f'Augmented image statistics: {img_new.mean()}, {img_new.std()}, {img_new.min()}, {img_new.max()}')
-    print(f'Timed used: {time.time()-t0}s')
-    # unnormalize for visual inspection
-    img_unn = unnormalize_normal(img_new)
-    img_unn = img_unn.astype(np.uint8)
-    print(f'Image statstics: {img_unn.mean()}, {img_unn.std()}, {img_unn.min()}, {img_unn.max()}')
-    sitk.WriteImage(sitk.GetImageFromArray(img_unn[0]), f'{file_prefix}_aug.tiff')
-    write_swc(tree_new, f'{file_prefix}_aug.swc')

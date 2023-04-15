@@ -1,31 +1,19 @@
-#!/usr/bin/env python
 
-#================================================================
-#   Copyright (C) 2021 Yufeng Liu (Braintell, Southeast University). All rights reserved.
-#   
-#   Filename     : preprocess.py
-#   Author       : Yufeng Liu
-#   Date         : 2021-03-31
-#   Description  : This package tries to standardize the input image, 
-#                  for lowerize the burden when training, including: 
-#                  - resampling
-#                  - normalization
-#                  - format conversion
-#                  - dataset splitting
-#                  
-#================================================================
 
-import os, glob
+import os, glob, sys
 import numpy as np
 from skimage.io import imread, imsave
 from skimage.transform import resize
-from scipy.ndimage.interpolation import map_coordinates
 from copy import deepcopy
 import SimpleITK as sitk
 from multiprocessing.pool import Pool
 import pickle
 from skimage.draw import line_nd
 import skimage.morphology as morphology
+
+current = os.path.dirname(os.path.realpath(__file__))
+parent = os.path.dirname(current)
+sys.path.append(parent)
 
 from swc_handler import parse_swc, write_swc
 from path_util import get_file_prefix
@@ -75,6 +63,7 @@ def trim_out_of_box(tree_orig, imgshape, keep_candidate_points=True):
                         break
     return tree
 
+
 def swc_to_image(tree, soma, r_exp=(1, 3, 3), imgshape=(256,512,512), flipy=False):
     # Note imgshape in (z,y,x) order
     # initialize empty image
@@ -123,10 +112,14 @@ def swc_to_image(tree, soma, r_exp=(1, 3, 3), imgshape=(256,512,512), flipy=Fals
     # do morphology expansion
     selem = np.ones(r_exp, dtype=np.uint8)
     for z in range(r_exp[0]):
-        selem[z, 0, r_exp[2] - 1] = 0
-        selem[z, r_exp[1] - 1, 0] = 0
-        selem[z, 0, 0] = 0
-        selem[z, r_exp[1] - 1, r_exp[2] - 1] = 0
+        if z == 1:
+            selem[z, 0, r_exp[2] - 1] = 0
+            selem[z, r_exp[1] - 1, 0] = 0
+            selem[z, 0, 0] = 0
+            selem[z, r_exp[1] - 1, r_exp[2] - 1] = 0
+        else:
+            selem[z, ...] = 0
+            selem[z, 1, 1] = 1
 
     img = morphology.dilation(img, selem)
     img += soma[0]
@@ -134,12 +127,38 @@ def swc_to_image(tree, soma, r_exp=(1, 3, 3), imgshape=(256,512,512), flipy=Fals
     if flipy:
         img = img[:, ::-1]
 
-    return img.astype(np.bool).astype(np.uint8)
+    return img.astype(bool).astype(np.uint8)
     
+
 if __name__ == '__main__':
-    prefix = '8315_19523_2299'
-    swc_file = f'/home/lyf/Research/auto_trace/neuronet/data/task0001_17302/{prefix}.swc'
+    from file_io import *
+    imgfile = f'/PBshare/SEU-ALLEN/Users/Gaoyu/Neuron_dataset/dataset/img/256/raw/18465_26006.02_11073.60_5371.90.v3draw'
+    img = load_image(imgfile)
+    img = np.repeat(img, 3, axis=0)
+    print(img.shape)
+
+    swc_file = f'/PBshare/SEU-ALLEN/Users/Gaoyu/Neuron_dataset/dataset/swc/256/final/18465_26006.02_11073.60_5371.90.swc'
     tree = parse_swc(swc_file)
-    lab_img = swc_to_image(tree, 3, 0.4, (256,512,512))
-    sitk.WriteImage(sitk.GetImageFromArray(lab_img), f'{prefix}_label.tiff')
+    new_tree = []
+    for i, leaf in enumerate(tree):
+        idx, type_, x, y, z, r, p = leaf
+        new_tree.append((idx, type_, x, y, z*4, r, p))
+    somafile = f'/PBshare/SEU-ALLEN/Users/Gaoyu/Neuron_dataset/dataset/img/256/somaSeg/18465_26006.02_11073.60_5371.90.v3draw'
+    soma = load_image(somafile)[0]
+    imgshape = (128,256,256)
+    soma_pad = np.zeros(imgshape, dtype=soma.dtype)
+    center = [dim // 2 for dim in imgshape]
+    soma_shape = soma.shape
+    soma_pad[center[0] - soma_shape[0] // 2 : center[0] + soma_shape[0] // 2,
+    center[1] - soma_shape[1] // 2 : center[1] + soma_shape[1] // 2,
+    center[2] - soma_shape[2] // 2 : center[2] + soma_shape[2] // 2] = soma
+    soma_pad = soma_pad[None]
+    new_soma_pad = resize(soma_pad, (512,256,256), order=0, mode='edge', anti_aliasing=False)
+    lab_img = swc_to_image(new_tree, new_soma_pad, imgshape=(512,256,256))
+    print(lab_img.shape)
+    lab_img = lab_img*255
+    lab_img = lab_img[None]
+    lab_img = 255 - lab_img
+    save_image('/home/freewill/lab_18465_26006.v3draw', lab_img)
+    # sitk.WriteImage(sitk.GetImageFromArray(lab_img), f'{prefix}_label.tiff')
 

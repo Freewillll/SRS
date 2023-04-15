@@ -1,21 +1,6 @@
-#!/usr/bin/env python
 
-#================================================================
-#   Copyright (C) 2021 Yufeng Liu (Braintell, Southeast University). All rights reserved.
-#   
-#   Filename     : preprocess.py
-#   Author       : Yufeng Liu
-#   Date         : 2021-03-31
-#   Description  : This package tries to standardize the input image, 
-#                  for lowerize the burden when training, including: 
-#                  - resampling
-#                  - normalization
-#                  - format conversion
-#                  - dataset splitting
-#                  
-#================================================================
 
-import os, glob
+import os, glob, sys
 import numpy as np
 from skimage.io import imread, imsave
 from skimage.transform import resize
@@ -27,19 +12,17 @@ from multiprocessing.pool import Pool
 import pickle
 from fnmatch import fnmatch, fnmatchcase
 
-from pylib.swc_handler import parse_swc, write_swc
-from pylib.path_util import get_file_prefix
-from pylib.file_io import *
+from swc_handler import parse_swc, write_swc
+from path_util import get_file_prefix
+from file_io import *
 
-from neuronet.utils.image_util import normalize_normal
-from neuronet.datasets.swc_processing import soma_labelling, trim_swc, load_spacing
+current = os.path.dirname(os.path.realpath(__file__))
+parent = os.path.dirname(current)
+sys.path.append(parent)
+
+from utils.image_util import normalize_normal
 
 def load_data(data_dir, img_shape=[128,256,256], soma_shape=[64, 128, 128], spacing=(1,1,1), is_train=True):
-    '''data_dir = '/home/lyf/data/seu_mouse/crop_data/dendriteImageSecR'
-    spacing_file = '/home/lyf/data/seu_mouse/crop_data/scripts/AllbrainResolutionInfo.csv'
-    data_list = load_data(data_dir, spacing_file)
-    print(f'--> Number of data sample: {len(data_list)}')
-    '''
 
     # load the spacing file
     img_dir = os.path.join(data_dir, 'img', str(img_shape[1]), 'raw')
@@ -92,7 +75,7 @@ class GenericPreprocessor(object):
             soma = load_image(somafile)
             if soma.ndim == 3:
                 soma = soma[None]
-            np.savez_compressed(somafile_out, data=soma.astype(np.bool))
+            np.savez_compressed(somafile_out, data=soma.astype(bool))
 
         if swcfile is not None:
             tree = parse_swc(swcfile)
@@ -167,12 +150,12 @@ class GenericPreprocessor(object):
 
         
 if __name__ == '__main__':
-    data_dir = '/PBshare/SEU-ALLEN/Users/Gaoyu/neuronSegSR/dataset'
-    output_dir = '/PBshare/SEU-ALLEN/Users/Gaoyu/neuronSegSR/test_neuron_256_512_512'
+    data_dir = '/PBshare/SEU-ALLEN/Users/Gaoyu/Neuron_dataset/dataset/benchmark/packed_neurites'
+    output_dir = '/PBshare/SEU-ALLEN/Users/Gaoyu/Neuron_dataset/Task007_srs_packed'
     is_train = False
     num_threads = 16
     gp = GenericPreprocessor()
-    gp.run(data_dir, output_dir, img_shape=[256, 512, 512], is_train=is_train, num_threads=num_threads)
-    gp.dataset_split(output_dir, val_ratio=0, test_ratio=1.0, seed=1024, img_ext='.npz', lab_ext='.swc')
+    gp.run(data_dir, output_dir, img_shape=[32, 64, 64], is_train=is_train, num_threads=num_threads)
+    gp.dataset_split(output_dir, val_ratio=0.0, test_ratio=1.0, seed=1024, img_ext='.npz', lab_ext='.swc')
     
 

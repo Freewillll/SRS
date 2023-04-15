@@ -1,0 +1,12 @@
+{
+    "in_channels": 1,
+    "img_shape": [32, 64, 64],
+    "patch_size": [4, 8, 8],
+    "n_cls": 2,
+    "dim": 1024,
+    "depth": 6,
+    "res_rescale": [4,1,1],
+    "heads": 16,
+    "dim_head": 64,
+    "mlp_dim": 2048
+  }

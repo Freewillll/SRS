@@ -3,8 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-import sys
-import os 
+import sys, os
 
 current = os.path.dirname(os.path.realpath(__file__))
 parent = os.path.dirname(current)
@@ -12,9 +11,8 @@ sys.path.append(parent)
 
 from datasets.generic_dataset import *
 
-
-
 def pair3d(t):
+    print(t)
     return t if isinstance(t, tuple) else (t, t, t)
 
 
@@ -99,7 +97,7 @@ class Attention(nn.Module):
             q = self.to_q(x)
             k = self.to_k(memory)
             v = self.to_v(memory)
-            q, k, v = map(lambda t: rearrange(q, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
+            q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
 
         #  q, k, v dim:  b, h, n, d
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
@@ -175,19 +173,21 @@ class DecoderLinear(nn.Module):
 
     def forward(self, x, im_size):
         D, W, H = im_size
-        p_h = H // self.patch_size
-        p_w = W // self.patch_size
+        p_h = H // self.patch_size[2]
+        p_w = W // self.patch_size[1]
         x = self.head(x)
         x = rearrange(x, "b (d w h) c -> b c d w h", h=p_h, w=p_w)
         return x
 
 
 class SRS(nn.Module):
-    def __init__(self, in_channels, patch_size, n_cls, dim, depth, heads, dim_head, mlp_dim, img_shape):
+    def __init__(self, in_channels, patch_size, n_cls, dim, depth, heads, dim_head, mlp_dim, img_shape, res_rescale):
         super(SRS, self).__init__()
 
         *_, d, w, h = img_shape
         self.im_size = (d, w, h)
+        self.output_size = (d*res_rescale[0], w*res_rescale[1], h*res_rescale[2])
+        patch_size = tuple(patch_size)
 
         self.encoder = Encoder(
             image_size=(d, w, h),
@@ -211,8 +211,9 @@ class SRS(nn.Module):
         assert img.ndim == 5
         x = self.encoder(img)
         masks = self.decoder(x, self.im_size)
-        masks = F.interpolate(masks, size=self.im_size, mode="bilinear")
+        masks = F.interpolate(masks, size=self.output_size, mode="trilinear")
         return masks
+
 
 if __name__ == '__main__':
     from torchinfo import summary
@@ -220,15 +221,15 @@ if __name__ == '__main__':
     conf_file = 'configs/default_config.json'
     with open(conf_file) as fp:
         configs = json.load(fp)
+    print(configs)
     print('Initialize model...')
 
     img = torch.randn(2, 1, 32, 64, 64)
-    seq = torch.randn(2, 10, 8, 4)
-    model = NTT(**configs)
+    model = SRS(**configs)
     print(model)
-    outputs = model(img, seq)
+    outputs = model(img)
 
     for output in outputs:
         print('output size: ', output.size())
 
-    summary(model, input_size=[(2, 1, 32, 64, 64), (2, 10, 8, 4)])
+    summary(model, input_size=(2, 1, 32, 64, 64))
