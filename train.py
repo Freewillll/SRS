@@ -406,7 +406,7 @@ def main():
     with open(args.net_config) as fp:
         net_configs = json.load(fp)
         print('Network configs: ', net_configs)
-        model = unet.UNet(**net_configs)
+        model = trans_unet.TransUnet(**net_configs)
         ddp_print('\n' + '=' * 10 + 'Network Structure' + '=' * 10)
         ddp_print(model)
         ddp_print('=' * 30 + '\n')

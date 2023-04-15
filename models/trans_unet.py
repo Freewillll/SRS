@@ -210,7 +210,7 @@ class BottleNeck(nn.Module):
 
 
 class TransUnet(nn.Module):
-    def __init__(self, in_channels, base_num_filters, head_dim, class_num, down_kernel_list, stride_list, patch_size,
+    def __init__(self, in_channels, base_num_filters, scale_factor, head_dim, class_num, down_kernel_list, stride_list, patch_size,
                  dim, depth, heads, dim_head, mlp_dim, img_shape):
         super(TransUnet, self).__init__()
         assert len(down_kernel_list) == len(stride_list)
@@ -278,7 +278,7 @@ class TransUnet(nn.Module):
         self.downs = nn.ModuleList(self.downs)
         self.ups = nn.ModuleList(self.ups)
         self.class_conv = nn.Conv3d(final_channels, class_num, 1)
-        self.rescale = Upsample(scale_factor=[4,1,1], mode='trilinear')
+        self.rescale = Upsample(scale_factor=scale_factor, mode='trilinear')
 
 
     def forward(self, x):
